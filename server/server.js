@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
+const cron = require('node-cron');
 const stockRoutes = require('./routes/stock');
+const niftyService = require('./services/niftyTotalMarketService');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -66,6 +68,43 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
+
+// ============================================
+// AUTO-REFRESH SCHEDULER (FREE with node-cron)
+// ============================================
+
+// Refresh stock list daily at 5:30 AM IST (before market opens)
+// 5:30 AM IST = 00:00 UTC (IST is UTC+5:30)
+cron.schedule('0 0 * * *', async () => {
+    console.log('🔄 [CRON] Starting daily stock list refresh...');
+    try {
+        await niftyService.fetchNSEStockList();
+        console.log('✅ [CRON] Stock list refreshed successfully');
+    } catch (error) {
+        console.error('❌ [CRON] Stock list refresh failed:', error.message);
+    }
+}, {
+    timezone: 'Asia/Kolkata'
+});
+
+// Refresh patterns every day at 6 AM IST (before market opens)
+// This runs the full pattern discovery
+cron.schedule('0 6 * * *', async () => {
+    console.log('🔄 [CRON] Starting daily pattern discovery refresh...');
+    try {
+        const patterns = await niftyService.discoverTopGainerPatterns();
+        console.log(`✅ [CRON] Pattern discovery complete. Found ${patterns.summary.totalBigGainerEvents} big gainer events.`);
+    } catch (error) {
+        console.error('❌ [CRON] Pattern discovery failed:', error.message);
+    }
+}, {
+    timezone: 'Asia/Kolkata'
+});
+
+// Log that schedulers are active
+console.log('⏰ Auto-refresh schedulers configured:');
+console.log('   - Stock list refresh: Daily at 5:30 AM IST');
+console.log('   - Pattern discovery: Daily at 6:00 AM IST');
 
 // Start server
 app.listen(port, () => {

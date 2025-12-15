@@ -5,14 +5,198 @@
  * Target: Find stocks that will gain 10%+ tomorrow
  * Method: Analyze what patterns existed BEFORE stocks became top gainers
  *
- * Based on real top gainer data like:
- * - Refex Industries +17.46%
- * - Shakti Pumps +15.70%
- * - Jai Balaji Industries +10.62%
+ * NOW WITH DYNAMIC FEATURES:
+ * - Fetches live stock list from NSE India (FREE)
+ * - Caches patterns to file for persistence
+ * - Auto-fetches today's top gainers
  */
 
 const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+
+// Cache file paths
+const CACHE_DIR = path.join(__dirname, '../cache');
+const PATTERNS_CACHE_FILE = path.join(CACHE_DIR, 'nifty-patterns.json');
+const STOCKS_CACHE_FILE = path.join(CACHE_DIR, 'nifty-stocks.json');
+
+// Ensure cache directory exists
+if (!fs.existsSync(CACHE_DIR)) {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+
+// Dynamic stock list (will be populated from NSE)
+let dynamicStockList = null;
+let lastStockListUpdate = null;
+
+// NSE API headers (required for NSE endpoints)
+const NSE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'application/json',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Referer': 'https://www.nseindia.com/'
+};
+
+/**
+ * Fetch live stock list from NSE India (FREE)
+ */
+async function fetchNSEStockList() {
+    try {
+        console.log('📡 Fetching live stock list from NSE India...');
+
+        // Create axios instance with cookie jar for NSE
+        const nseAxios = axios.create({
+            baseURL: 'https://www.nseindia.com',
+            headers: NSE_HEADERS,
+            timeout: 10000
+        });
+
+        // First, get cookies from main page
+        await nseAxios.get('/');
+
+        // Fetch different index constituents
+        const indices = [
+            { name: 'NIFTY 50', url: '/api/equity-stockIndices?index=NIFTY%2050' },
+            { name: 'NIFTY NEXT 50', url: '/api/equity-stockIndices?index=NIFTY%20NEXT%2050' },
+            { name: 'NIFTY MIDCAP 150', url: '/api/equity-stockIndices?index=NIFTY%20MIDCAP%20150' },
+            { name: 'NIFTY SMALLCAP 250', url: '/api/equity-stockIndices?index=NIFTY%20SMALLCAP%20250' }
+        ];
+
+        const stocks = new Set();
+
+        for (const index of indices) {
+            try {
+                const response = await nseAxios.get(index.url);
+                if (response.data && response.data.data) {
+                    response.data.data.forEach(stock => {
+                        if (stock.symbol) {
+                            stocks.add(stock.symbol + '.NS');
+                        }
+                    });
+                }
+                console.log(`  ✓ ${index.name}: ${response.data?.data?.length || 0} stocks`);
+            } catch (e) {
+                console.log(`  ✗ ${index.name}: Failed`);
+            }
+            await new Promise(r => setTimeout(r, 500));
+        }
+
+        if (stocks.size > 0) {
+            dynamicStockList = Array.from(stocks);
+            lastStockListUpdate = new Date();
+
+            // Cache to file
+            fs.writeFileSync(STOCKS_CACHE_FILE, JSON.stringify({
+                stocks: dynamicStockList,
+                timestamp: lastStockListUpdate.toISOString(),
+                source: 'NSE India API'
+            }, null, 2));
+
+            console.log(`✅ Fetched ${dynamicStockList.length} stocks from NSE`);
+            return dynamicStockList;
+        }
+    } catch (error) {
+        console.error('❌ NSE fetch failed:', error.message);
+    }
+
+    // Return null to fall back to static list
+    return null;
+}
+
+/**
+ * Fetch today's top gainers from NSE (FREE)
+ */
+async function fetchTodaysTopGainers() {
+    try {
+        console.log('📈 Fetching today\'s top gainers from NSE...');
+
+        const nseAxios = axios.create({
+            baseURL: 'https://www.nseindia.com',
+            headers: NSE_HEADERS,
+            timeout: 10000
+        });
+
+        // Get cookies first
+        await nseAxios.get('/');
+
+        // Fetch top gainers
+        const response = await nseAxios.get('/api/live-analysis-variations?index=gainers');
+
+        if (response.data && response.data.NIFTY) {
+            const gainers = response.data.NIFTY.data || [];
+            console.log(`✅ Found ${gainers.length} top gainers from NSE`);
+
+            return gainers.map(g => ({
+                symbol: g.symbol + '.NS',
+                name: g.symbol,
+                change: g.pChange,
+                price: g.lastPrice,
+                volume: g.totalTradedVolume
+            }));
+        }
+
+        return [];
+    } catch (error) {
+        console.error('❌ Top gainers fetch failed:', error.message);
+        return [];
+    }
+}
+
+/**
+ * Load patterns from cache file
+ */
+function loadCachedPatterns() {
+    try {
+        if (fs.existsSync(PATTERNS_CACHE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(PATTERNS_CACHE_FILE, 'utf8'));
+            console.log(`📂 Loaded cached patterns from ${data.timestamp}`);
+            return data;
+        }
+    } catch (error) {
+        console.error('Cache load error:', error.message);
+    }
+    return null;
+}
+
+/**
+ * Save patterns to cache file
+ */
+function savePatternsToCache(patterns) {
+    try {
+        fs.writeFileSync(PATTERNS_CACHE_FILE, JSON.stringify(patterns, null, 2));
+        console.log('💾 Patterns saved to cache');
+        return true;
+    } catch (error) {
+        console.error('Cache save error:', error.message);
+        return false;
+    }
+}
+
+/**
+ * Load cached stock list
+ */
+function loadCachedStocks() {
+    try {
+        if (fs.existsSync(STOCKS_CACHE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(STOCKS_CACHE_FILE, 'utf8'));
+            const cacheAge = (Date.now() - new Date(data.timestamp).getTime()) / (1000 * 60 * 60);
+
+            if (cacheAge < 24) { // Cache valid for 24 hours
+                console.log(`📂 Using cached stock list (${data.stocks.length} stocks, ${cacheAge.toFixed(1)}h old)`);
+                dynamicStockList = data.stocks;
+                lastStockListUpdate = new Date(data.timestamp);
+                return data.stocks;
+            }
+        }
+    } catch (error) {
+        console.error('Stock cache load error:', error.message);
+    }
+    return null;
+}
 
 // Nifty Total Market - Comprehensive list of 500+ Indian stocks
 // Includes Nifty 50, Nifty Next 50, Nifty Midcap 150, Nifty Smallcap 250
@@ -147,8 +331,40 @@ const NIFTY_TOTAL_MARKET = {
     ]
 };
 
-// Get all unique stocks
-function getAllStocks() {
+// Get all unique stocks (DYNAMIC - tries NSE first, falls back to static list)
+async function getAllStocks(forceRefresh = false) {
+    // Try to use dynamic list first
+    if (!forceRefresh && dynamicStockList && dynamicStockList.length > 0) {
+        return dynamicStockList;
+    }
+
+    // Try to load from cache
+    const cachedStocks = loadCachedStocks();
+    if (cachedStocks && cachedStocks.length > 0) {
+        return cachedStocks;
+    }
+
+    // Try to fetch from NSE (async)
+    const nseStocks = await fetchNSEStockList();
+    if (nseStocks && nseStocks.length > 0) {
+        return nseStocks;
+    }
+
+    // Fall back to static list
+    console.log('📋 Using static stock list (500+ stocks)');
+    const allStocks = new Set();
+    Object.values(NIFTY_TOTAL_MARKET).forEach(stocks => {
+        stocks.forEach(s => allStocks.add(s));
+    });
+    return Array.from(allStocks);
+}
+
+// Sync version for backward compatibility
+function getAllStocksSync() {
+    if (dynamicStockList && dynamicStockList.length > 0) {
+        return dynamicStockList;
+    }
+
     const allStocks = new Set();
     Object.values(NIFTY_TOTAL_MARKET).forEach(stocks => {
         stocks.forEach(s => allStocks.add(s));
@@ -346,7 +562,7 @@ async function discoverTopGainerPatterns(progressCallback = null) {
     console.log('🔍 Starting 5-year Nifty Total Market pattern discovery...');
     console.log('⏱️ This will analyze thousands of trading days. Please wait...');
 
-    const allStocks = getAllStocks();
+    const allStocks = await getAllStocks();
     console.log(`📊 Analyzing ${allStocks.length} stocks...`);
 
     // Pattern counters for 10%+ gainers
@@ -482,9 +698,12 @@ async function discoverTopGainerPatterns(progressCallback = null) {
         timestamp: new Date().toISOString()
     };
 
-    // Cache patterns
+    // Cache patterns in memory
     discoveredPatterns = patterns;
     lastDiscoveryTime = new Date();
+
+    // Save patterns to file for persistence across restarts
+    savePatternsToCache(patterns);
 
     return patterns;
 }
@@ -583,14 +802,34 @@ function scoreByDiscoveredPatterns(indicators, patterns) {
 
 /**
  * Get cached patterns or discover new
+ * Priority: 1) Memory cache 2) File cache 3) Fresh discovery
  */
 async function getPatterns(forceRefresh = false) {
+    // Check memory cache first
     if (!forceRefresh && discoveredPatterns && lastDiscoveryTime) {
         const hoursSince = (new Date() - lastDiscoveryTime) / (1000 * 60 * 60);
         if (hoursSince < 24) {
+            console.log('📦 Using in-memory cached patterns');
             return discoveredPatterns;
         }
     }
+
+    // Try to load from file cache (persists across restarts)
+    if (!forceRefresh) {
+        const cachedPatterns = loadCachedPatterns();
+        if (cachedPatterns && cachedPatterns.timestamp) {
+            const cacheAge = (Date.now() - new Date(cachedPatterns.timestamp).getTime()) / (1000 * 60 * 60);
+            if (cacheAge < 24) {
+                console.log(`📂 Using file-cached patterns (${cacheAge.toFixed(1)}h old)`);
+                discoveredPatterns = cachedPatterns;
+                lastDiscoveryTime = new Date(cachedPatterns.timestamp);
+                return cachedPatterns;
+            }
+        }
+    }
+
+    // Discover fresh patterns
+    console.log('🔄 Cache expired or forced refresh - discovering fresh patterns...');
     return await discoverTopGainerPatterns();
 }
 
@@ -619,11 +858,23 @@ function getPatternSummary() {
 }
 
 module.exports = {
+    // Pattern discovery
     discoverTopGainerPatterns,
     getPatterns,
     getPatternSummary,
     scoreByDiscoveredPatterns,
+
+    // Stock list (dynamic)
     getAllStocks,
+    getAllStocksSync,
+    fetchNSEStockList,
+    fetchTodaysTopGainers,
+
+    // Cache management
+    loadCachedPatterns,
+    savePatternsToCache,
+
+    // Static data
     NIFTY_TOTAL_MARKET,
     BIG_GAINER_PATTERNS
 };

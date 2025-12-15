@@ -5,6 +5,7 @@ const { performTechnicalAnalysis } = require('../analysis/technicalAnalysis');
 const { performFundamentalAnalysis } = require('../analysis/fundamentalAnalysis');
 const { performQuantitativeAnalysis } = require('../analysis/quantitativeAnalysis');
 const { generateAnalysisExplanation, generateMarketSentiment, getMarketStatus } = require('../services/geminiService');
+const { predictTopGainers } = require('../services/topGainerService');
 
 // Input validation regex for stock symbols
 const VALID_SYMBOL_REGEX = /^[A-Z0-9.\-^]{1,12}$/i;
@@ -26,6 +27,43 @@ router.get('/search/:query', async (req, res) => {
     } catch (error) {
         console.error(`Search error for "${query}":`, error);
         res.status(500).json({ error: 'Search failed', results: [] });
+    }
+});
+
+/**
+ * Top Gainers Prediction Endpoint
+ * Predicts tomorrow's potential top gainers using pattern analysis
+ * Categories: Large Cap, Mid Cap, Small Cap
+ */
+router.get('/predictions/top-gainers', async (req, res) => {
+    try {
+        console.log('Generating top gainer predictions...');
+        const predictions = await predictTopGainers();
+
+        // Add tomorrow's date
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toLocaleDateString('en-IN', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+
+        res.json({
+            success: true,
+            predictionDate: tomorrowStr,
+            generatedAt: new Date().toISOString(),
+            predictions: predictions,
+            disclaimer: 'These predictions are based on historical pattern analysis and AI algorithms. This is NOT financial advice. Past performance does not guarantee future results. Always do your own research before investing.'
+        });
+    } catch (error) {
+        console.error('Top gainer prediction error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to generate predictions. Please try again later.',
+            predictions: null
+        });
     }
 });
 

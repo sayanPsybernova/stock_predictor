@@ -6,6 +6,7 @@ import PriceChart from './components/PriceChart';
 import AnalysisTabs from './components/AnalysisTabs';
 import Disclaimer from './components/Disclaimer';
 import Spinner from './components/Spinner';
+import TopGainersModal from './components/TopGainersModal';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -19,6 +20,7 @@ function App() {
     const [stockData, setStockData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    const [showTopGainers, setShowTopGainers] = useState(false);
 
     const fetchStockData = async (symbol, exchange = 'AUTO') => {
         if (!symbol || !symbol.trim()) return;
@@ -67,7 +69,17 @@ function App() {
         <div className="min-h-screen bg-gray-900 text-gray-300 font-sans">
             <header className="bg-gray-800 p-4 shadow-lg">
                 <div className="container mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
-                    <h1 className="text-2xl font-bold text-white">Quantitative Stock Analysis</h1>
+                    <div className="flex items-center gap-4">
+                        <h1 className="text-2xl font-bold text-white">Quantitative Stock Analysis</h1>
+                        <button
+                            onClick={() => setShowTopGainers(true)}
+                            className="px-4 py-2 bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 text-white rounded-lg font-medium text-sm transition-all shadow-lg hover:shadow-purple-500/25 flex items-center gap-2"
+                        >
+                            <span>🚀</span>
+                            <span className="hidden sm:inline">Top Gainers</span>
+                            <span className="sm:hidden">Predict</span>
+                        </button>
+                    </div>
                     <SearchBar onSearch={fetchStockData} loading={loading} />
                 </div>
             </header>
@@ -109,6 +121,12 @@ function App() {
             <footer className="bg-gray-800 p-4 text-center text-xs text-gray-500">
                 <p>This analysis is based on statistical models and historical data. For educational purposes only. Not financial advice.</p>
             </footer>
+
+            {/* Top Gainers Prediction Modal */}
+            <TopGainersModal
+                isOpen={showTopGainers}
+                onClose={() => setShowTopGainers(false)}
+            />
         </div>
     );
 }

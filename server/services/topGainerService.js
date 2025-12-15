@@ -22,6 +22,7 @@ const nseService = require('./nseService');
 const tradingViewService = require('./tradingViewService');
 const newsService = require('./newsService');
 const globalIndicesService = require('./globalIndicesService');
+const historicalPatternService = require('./historicalPatternService');
 
 // Indian Stock Universe by Market Cap
 const STOCK_UNIVERSE = {
@@ -580,6 +581,7 @@ async function predictTopGainers() {
         methodology: {
             dataSourcesUsed: [
                 'Yahoo Finance Real-Time Quotes & Historical Data',
+                '3-Year Historical Pattern Analysis (Data-Driven)',
                 'Chartink Technical Scans (Volume Shockers, Breakouts, RSI)',
                 'NSE India Option Chain & FII/DII Data',
                 'TradingView Technical Analysis Signals',
@@ -588,14 +590,19 @@ async function predictTopGainers() {
             ],
             patternsAnalyzed: Object.keys(TOP_GAINER_PATTERNS).map(k => TOP_GAINER_PATTERNS[k].name),
             scoringWeights: {
-                yahooFinanceTechnicals: '30%',
-                chartinkScans: '20%',
+                yahooFinanceTechnicals: '25%',
+                historicalPatterns: '20% (when available)',
+                chartinkScans: '15%',
                 tradingViewSignals: '15%',
                 newsSentiment: '15%',
-                globalCues: '10%',
-                optionChainData: '10%'
+                globalCues: '10%'
             },
-            dataFreshness: 'Real-time multi-source',
+            historicalPatternInfo: {
+                description: 'Patterns discovered from 3 years of daily top gainers',
+                endpoint: '/api/stock/patterns/discover',
+                note: 'Run pattern discovery to enable data-driven predictions'
+            },
+            dataFreshness: 'Real-time multi-source + historical patterns',
             lastUpdated: new Date().toISOString()
         }
     };
@@ -638,13 +645,17 @@ async function predictTopGainers() {
                 // Step 6: Calculate MULTI-SOURCE pattern score
                 const basePatternScore = calculatePatternScore(stockData);
 
-                // Calculate final score with all sources
+                // Step 7: Get historical pattern-based score (if patterns discovered)
+                const historicalScore = await getHistoricalPatternScore(stockData);
+
+                // Calculate final score with all sources including historical patterns
                 const multiSourceScore = calculateMultiSourceScore({
                     baseScore: basePatternScore.totalScore,
                     chartinkScore: chartinkAnalysis.totalScore,
                     tvScore: tvScore.score,
                     newsScore: newsScore.score,
-                    globalScore: globalCuesScore.score
+                    globalScore: globalCuesScore.score,
+                    patternScore: historicalScore.score
                 });
 
                 // Generate enhanced detailed reasons
@@ -663,13 +674,14 @@ async function predictTopGainers() {
                     }
                 );
 
-                // Compile all signals
+                // Compile all signals including historical pattern insights
                 const allSignals = [
                     ...generateKeySignals(stockData, basePatternScore),
+                    ...(historicalScore.reasoning || []).map(r => `🎯 ${r}`),
                     ...tvScore.signals.map(s => `📈 ${s}`),
                     ...newsScore.signals.map(s => `📰 ${s}`),
                     ...chartinkAnalysis.matchedScans.map(s => `🔍 ${s.scan}`)
-                ].slice(0, 6);
+                ].slice(0, 7);
 
                 results.push({
                     ...stock,
@@ -682,11 +694,21 @@ async function predictTopGainers() {
                     // Multi-source scores breakdown
                     sourceScores: {
                         technical: basePatternScore.totalScore.toFixed(1),
+                        historicalPattern: historicalScore.score.toFixed(1),
                         chartink: chartinkAnalysis.totalScore.toFixed(1),
                         tradingView: tvScore.score.toFixed(1),
                         news: newsScore.score.toFixed(1),
                         globalCues: globalCuesScore.score.toFixed(1),
-                        final: multiSourceScore.finalScore.toFixed(1)
+                        final: multiSourceScore.finalScore.toFixed(1),
+                        patternMatch: historicalScore.patternMatch || '0'
+                    },
+
+                    // Historical pattern analysis
+                    historicalPatternAnalysis: {
+                        score: historicalScore.score.toFixed(1),
+                        reasoning: historicalScore.reasoning || [],
+                        patternMatch: historicalScore.patternMatch || '0',
+                        available: historicalScore.score > 0
                     },
 
                     technicalIndicators: {
@@ -756,19 +778,88 @@ async function predictTopGainers() {
 }
 
 /**
- * Calculate multi-source combined score
+ * Calculate indicators for pattern-based scoring
+ * Uses the same methodology as historical pattern discovery
  */
-function calculateMultiSourceScore({ baseScore, chartinkScore, tvScore, newsScore, globalScore }) {
+function calculateStockIndicators(stockData) {
+    if (!stockData) return null;
+
+    const volumeRatio = stockData.avgVolume > 0
+        ? stockData.volume / stockData.avgVolume
+        : 1;
+
+    // Calculate distance from 20-day high
+    const distanceFrom20DayHigh = stockData.high20D && stockData.currentPrice
+        ? ((stockData.high20D - stockData.currentPrice) / stockData.high20D) * 100
+        : 10;
+
+    // Previous day change (use today's change as proxy since we don't have yesterday's)
+    const prevDayChange = stockData.priceChangePercent || 0;
+
+    // Price vs SMA20 (approximated from trend)
+    const priceVsSMA20 = stockData.trend === 'Uptrend' ? 2 :
+                         stockData.trend === 'Downtrend' ? -2 : 0;
+
+    return {
+        rsi: stockData.rsi || 50,
+        volumeRatio,
+        distanceFrom20DayHigh,
+        prevDayChange,
+        priceVsSMA20,
+        aboveSMA20: stockData.trend === 'Uptrend'
+    };
+}
+
+/**
+ * Get pattern-based score using discovered historical patterns
+ */
+async function getHistoricalPatternScore(stockData) {
+    try {
+        // Get cached patterns (won't run discovery if not already done)
+        const patterns = await historicalPatternService.getPatterns(false);
+
+        if (!patterns) {
+            return { score: 0, reasoning: ['Historical patterns not yet discovered'], patternMatch: '0' };
+        }
+
+        // Calculate current indicators
+        const indicators = calculateStockIndicators(stockData);
+        if (!indicators) {
+            return { score: 0, reasoning: ['Could not calculate indicators'], patternMatch: '0' };
+        }
+
+        // Score using discovered patterns
+        return historicalPatternService.scoreByPatterns(indicators, patterns);
+    } catch (error) {
+        console.warn('Pattern scoring error:', error.message);
+        return { score: 0, reasoning: ['Pattern scoring unavailable'], patternMatch: '0' };
+    }
+}
+
+/**
+ * Calculate multi-source combined score
+ * Now includes historical pattern-based scoring when available
+ */
+function calculateMultiSourceScore({ baseScore, chartinkScore, tvScore, newsScore, globalScore, patternScore = 0 }) {
     // Weighted scoring:
-    // - Base Technical (Yahoo Finance): 30%
-    // - Chartink Scans: 20%
+    // - Base Technical (Yahoo Finance): 25%
+    // - Historical Pattern Match: 20% (NEW - data-driven patterns)
+    // - Chartink Scans: 15%
     // - TradingView Signals: 15%
     // - News Sentiment: 15%
     // - Global Cues: 10%
-    // - Buffer for OI data: 10% (included in base for now)
 
-    const weights = {
+    const weights = patternScore > 0 ? {
+        base: 0.25,
+        pattern: 0.20,  // Historical patterns get significant weight when available
+        chartink: 0.15,
+        tradingView: 0.15,
+        news: 0.15,
+        global: 0.10
+    } : {
+        // Fallback weights when patterns not available
         base: 0.35,
+        pattern: 0,
         chartink: 0.20,
         tradingView: 0.15,
         news: 0.15,
@@ -777,6 +868,7 @@ function calculateMultiSourceScore({ baseScore, chartinkScore, tvScore, newsScor
 
     const weightedScore =
         (baseScore * weights.base) +
+        (patternScore * weights.pattern) +
         (chartinkScore * weights.chartink) +
         (tvScore * weights.tradingView) +
         (newsScore * weights.news) +
@@ -786,27 +878,29 @@ function calculateMultiSourceScore({ baseScore, chartinkScore, tvScore, newsScor
 
     // Determine confidence based on data availability and score agreement
     let confidence = 'Low';
-    const scores = [baseScore, chartinkScore, tvScore, newsScore].filter(s => s > 0);
+    const scores = [baseScore, chartinkScore, tvScore, newsScore, patternScore].filter(s => s > 0);
 
-    if (scores.length >= 3 && finalScore > 60) {
+    if (scores.length >= 4 && finalScore > 60) {
         confidence = 'High';
-    } else if (scores.length >= 2 && finalScore > 40) {
+    } else if (scores.length >= 3 && finalScore > 40) {
         confidence = 'Medium';
     }
 
     // Boost confidence if multiple sources agree
     const bullishSources = [
         baseScore > 50,
+        patternScore > 50,
         chartinkScore > 30,
         tvScore > 50,
         newsScore > 10,
         globalScore > 10
     ].filter(Boolean).length;
 
-    if (bullishSources >= 4) confidence = 'Very High';
+    if (bullishSources >= 5) confidence = 'Very High';
+    else if (bullishSources >= 4) confidence = 'High';
     else if (bullishSources >= 3 && confidence === 'Medium') confidence = 'High';
 
-    return { finalScore, confidence, bullishSources };
+    return { finalScore, confidence, bullishSources, patternContribution: patternScore > 0 };
 }
 
 /**

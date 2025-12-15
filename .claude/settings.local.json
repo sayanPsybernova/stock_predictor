@@ -15,7 +15,9 @@
       "Bash(findstr:*)",
       "Bash(taskkill:*)",
       "Bash(node:*)",
-      "Bash(start:*)"
+      "Bash(start:*)",
+      "Bash(curl:*)",
+      "Bash(timeout:*)"
     ]
   }
 }

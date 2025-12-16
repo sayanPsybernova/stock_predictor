@@ -17,7 +17,9 @@
       "Bash(node:*)",
       "Bash(start:*)",
       "Bash(curl:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(cat:*)",
+      "Bash(dir:*)"
     ]
   }
 }

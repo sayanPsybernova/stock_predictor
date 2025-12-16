@@ -3,6 +3,7 @@ const cors = require('cors');
 const cron = require('node-cron');
 const stockRoutes = require('./routes/stock');
 const niftyService = require('./services/niftyTotalMarketService');
+const mlService = require('./services/mlIntegrationService');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -107,7 +108,11 @@ console.log('   - Stock list refresh: Daily at 5:30 AM IST');
 console.log('   - Pattern discovery: Daily at 6:00 AM IST');
 
 // Start server
-app.listen(port, () => {
+app.listen(port, async () => {
     console.log(`Stock Analysis Server listening at http://localhost:${port}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+
+    // Initialize ML Service connection
+    console.log('🤖 Initializing ML Service connection...');
+    await mlService.initialize();
 });

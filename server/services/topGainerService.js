@@ -23,6 +23,7 @@ const tradingViewService = require('./tradingViewService');
 const newsService = require('./newsService');
 const globalIndicesService = require('./globalIndicesService');
 const historicalPatternService = require('./historicalPatternService');
+const mlService = require('./mlIntegrationService');
 
 // Indian Stock Universe by Market Cap
 const STOCK_UNIVERSE = {
@@ -581,21 +582,34 @@ async function predictTopGainers() {
         methodology: {
             dataSourcesUsed: [
                 'Yahoo Finance Real-Time Quotes & Historical Data',
+                mlService.isAvailable ? 'XGBoost ML Model (36 features, 5yr training)' : null,
                 '3-Year Historical Pattern Analysis (Data-Driven)',
                 'Chartink Technical Scans (Volume Shockers, Breakouts, RSI)',
                 'NSE India Option Chain & FII/DII Data',
                 'TradingView Technical Analysis Signals',
                 'Moneycontrol News Sentiment Analysis',
                 'Global Indices (US, Asia, Europe, SGX Nifty)'
-            ],
+            ].filter(Boolean),
             patternsAnalyzed: Object.keys(TOP_GAINER_PATTERNS).map(k => TOP_GAINER_PATTERNS[k].name),
-            scoringWeights: {
+            scoringWeights: mlService.isAvailable ? {
+                mlModel: '30% (XGBoost trained on 5yr patterns)',
+                yahooFinanceTechnicals: '20%',
+                historicalPatterns: '15%',
+                chartinkScans: '10%',
+                tradingViewSignals: '10%',
+                newsSentiment: '10%',
+                globalCues: '5%'
+            } : {
                 yahooFinanceTechnicals: '25%',
                 historicalPatterns: '20% (when available)',
                 chartinkScans: '15%',
                 tradingViewSignals: '15%',
                 newsSentiment: '15%',
                 globalCues: '10%'
+            },
+            mlServiceStatus: {
+                available: mlService.isAvailable,
+                info: mlService.isAvailable ? 'XGBoost model with 36 engineered features' : 'Not connected - using fallback weights'
             },
             historicalPatternInfo: {
                 description: 'Patterns discovered from 3 years of daily top gainers',
@@ -648,14 +662,31 @@ async function predictTopGainers() {
                 // Step 7: Get historical pattern-based score (if patterns discovered)
                 const historicalScore = await getHistoricalPatternScore(stockData);
 
-                // Calculate final score with all sources including historical patterns
+                // Step 8: Get ML model prediction (if ML service available)
+                let mlPrediction = null;
+                let mlScore = 0;
+                let mlReasoning = [];
+                if (mlService.isAvailable) {
+                    try {
+                        mlPrediction = await mlService.getStockPrediction(stock.symbol);
+                        if (mlPrediction) {
+                            mlScore = mlService.probabilityToScore(mlPrediction.probability);
+                            mlReasoning = mlPrediction.reasoning || [];
+                        }
+                    } catch (e) {
+                        console.warn(`ML prediction error for ${stock.symbol}:`, e.message);
+                    }
+                }
+
+                // Calculate final score with all sources including historical patterns and ML
                 const multiSourceScore = calculateMultiSourceScore({
                     baseScore: basePatternScore.totalScore,
                     chartinkScore: chartinkAnalysis.totalScore,
                     tvScore: tvScore.score,
                     newsScore: newsScore.score,
                     globalScore: globalCuesScore.score,
-                    patternScore: historicalScore.score
+                    patternScore: historicalScore.score,
+                    mlScore: mlScore
                 });
 
                 // Generate enhanced detailed reasons
@@ -674,14 +705,15 @@ async function predictTopGainers() {
                     }
                 );
 
-                // Compile all signals including historical pattern insights
+                // Compile all signals including historical pattern insights and ML
                 const allSignals = [
                     ...generateKeySignals(stockData, basePatternScore),
+                    ...mlReasoning.slice(0, 2).map(r => `🤖 ${r}`),  // ML model insights
                     ...(historicalScore.reasoning || []).map(r => `🎯 ${r}`),
                     ...tvScore.signals.map(s => `📈 ${s}`),
                     ...newsScore.signals.map(s => `📰 ${s}`),
                     ...chartinkAnalysis.matchedScans.map(s => `🔍 ${s.scan}`)
-                ].slice(0, 7);
+                ].slice(0, 8);
 
                 results.push({
                     ...stock,
@@ -695,12 +727,29 @@ async function predictTopGainers() {
                     sourceScores: {
                         technical: basePatternScore.totalScore.toFixed(1),
                         historicalPattern: historicalScore.score.toFixed(1),
+                        mlModel: mlScore.toFixed(1),  // ML model score
                         chartink: chartinkAnalysis.totalScore.toFixed(1),
                         tradingView: tvScore.score.toFixed(1),
                         news: newsScore.score.toFixed(1),
                         globalCues: globalCuesScore.score.toFixed(1),
                         final: multiSourceScore.finalScore.toFixed(1),
-                        patternMatch: historicalScore.patternMatch || '0'
+                        patternMatch: historicalScore.patternMatch || '0',
+                        mlPowered: mlScore > 0  // Flag if ML was used
+                    },
+
+                    // ML Model Analysis (NEW)
+                    mlAnalysis: mlPrediction ? {
+                        score: mlScore.toFixed(1),
+                        probability: (mlPrediction.probability * 100).toFixed(1) + '%',
+                        confidence: mlPrediction.confidence,
+                        reasoning: mlReasoning,
+                        available: true
+                    } : {
+                        score: '0',
+                        probability: 'N/A',
+                        confidence: 'N/A',
+                        reasoning: [],
+                        available: false
                     },
 
                     // Historical pattern analysis
@@ -840,24 +889,46 @@ async function getHistoricalPatternScore(stockData) {
  * Calculate multi-source combined score
  * Now includes historical pattern-based scoring when available
  */
-function calculateMultiSourceScore({ baseScore, chartinkScore, tvScore, newsScore, globalScore, patternScore = 0 }) {
-    // Weighted scoring:
-    // - Base Technical (Yahoo Finance): 25%
-    // - Historical Pattern Match: 20% (NEW - data-driven patterns)
-    // - Chartink Scans: 15%
-    // - TradingView Signals: 15%
-    // - News Sentiment: 15%
-    // - Global Cues: 10%
+function calculateMultiSourceScore({ baseScore, chartinkScore, tvScore, newsScore, globalScore, patternScore = 0, mlScore = 0 }) {
+    // Weighted scoring (updated with ML model):
+    // When ML available:
+    // - ML Model: 30% (highest weight - trained on historical patterns)
+    // - Base Technical (Yahoo Finance): 20%
+    // - Historical Pattern Match: 15%
+    // - Chartink Scans: 10%
+    // - TradingView Signals: 10%
+    // - News Sentiment: 10%
+    // - Global Cues: 5%
+    //
+    // When ML not available (fallback to original weights):
+    // - Base Technical: 25%
+    // - Historical Pattern: 20%
+    // - Chartink: 15%
+    // - TradingView: 15%
+    // - News: 15%
+    // - Global: 10%
 
-    const weights = patternScore > 0 ? {
+    const weights = mlScore > 0 ? {
+        // ML-enhanced weights
+        ml: 0.30,
+        base: 0.20,
+        pattern: 0.15,
+        chartink: 0.10,
+        tradingView: 0.10,
+        news: 0.10,
+        global: 0.05
+    } : patternScore > 0 ? {
+        // Fallback with patterns but no ML
+        ml: 0,
         base: 0.25,
-        pattern: 0.20,  // Historical patterns get significant weight when available
+        pattern: 0.20,
         chartink: 0.15,
         tradingView: 0.15,
         news: 0.15,
         global: 0.10
     } : {
-        // Fallback weights when patterns not available
+        // Fallback without patterns or ML
+        ml: 0,
         base: 0.35,
         pattern: 0,
         chartink: 0.20,
@@ -867,6 +938,7 @@ function calculateMultiSourceScore({ baseScore, chartinkScore, tvScore, newsScor
     };
 
     const weightedScore =
+        (mlScore * weights.ml) +
         (baseScore * weights.base) +
         (patternScore * weights.pattern) +
         (chartinkScore * weights.chartink) +
@@ -878,9 +950,11 @@ function calculateMultiSourceScore({ baseScore, chartinkScore, tvScore, newsScor
 
     // Determine confidence based on data availability and score agreement
     let confidence = 'Low';
-    const scores = [baseScore, chartinkScore, tvScore, newsScore, patternScore].filter(s => s > 0);
+    const scores = [baseScore, chartinkScore, tvScore, newsScore, patternScore, mlScore].filter(s => s > 0);
 
-    if (scores.length >= 4 && finalScore > 60) {
+    if (scores.length >= 5 && finalScore > 60) {
+        confidence = 'High';
+    } else if (scores.length >= 4 && finalScore > 60) {
         confidence = 'High';
     } else if (scores.length >= 3 && finalScore > 40) {
         confidence = 'Medium';
@@ -893,14 +967,23 @@ function calculateMultiSourceScore({ baseScore, chartinkScore, tvScore, newsScor
         chartinkScore > 30,
         tvScore > 50,
         newsScore > 10,
-        globalScore > 10
+        globalScore > 10,
+        mlScore > 60  // ML model shows high probability
     ].filter(Boolean).length;
 
-    if (bullishSources >= 5) confidence = 'Very High';
+    if (bullishSources >= 6) confidence = 'Very High';
+    else if (bullishSources >= 5) confidence = 'Very High';
     else if (bullishSources >= 4) confidence = 'High';
     else if (bullishSources >= 3 && confidence === 'Medium') confidence = 'High';
 
-    return { finalScore, confidence, bullishSources, patternContribution: patternScore > 0 };
+    return {
+        finalScore,
+        confidence,
+        bullishSources,
+        patternContribution: patternScore > 0,
+        mlContribution: mlScore > 0,
+        mlScore: mlScore
+    };
 }
 
 /**

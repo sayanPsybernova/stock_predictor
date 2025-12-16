@@ -372,6 +372,35 @@ const TopGainersModal = ({ isOpen, onClose }) => {
                 </div>
             </div>
 
+            {/* ML Model Prediction (if available) */}
+            {stock.mlAnalysis?.available && (
+                <div className="mb-3 bg-gradient-to-r from-indigo-900/40 to-purple-900/40 border border-indigo-500/30 rounded-lg p-2">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <span className="text-lg">🤖</span>
+                            <span className="text-indigo-300 text-xs font-semibold">ML Prediction</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className={`text-sm font-bold ${parseFloat(stock.mlAnalysis.score) >= 60 ? 'text-green-400' : parseFloat(stock.mlAnalysis.score) >= 40 ? 'text-yellow-400' : 'text-orange-400'}`}>
+                                {stock.mlAnalysis.probability}
+                            </span>
+                            <span className={`text-xs px-2 py-0.5 rounded ${
+                                stock.mlAnalysis.confidence === 'high' ? 'bg-green-500/30 text-green-300' :
+                                stock.mlAnalysis.confidence === 'medium' ? 'bg-yellow-500/30 text-yellow-300' :
+                                'bg-gray-500/30 text-gray-300'
+                            }`}>
+                                {stock.mlAnalysis.confidence}
+                            </span>
+                        </div>
+                    </div>
+                    {stock.mlAnalysis.reasoning?.length > 0 && (
+                        <div className="mt-1 text-xs text-indigo-200/80">
+                            {stock.mlAnalysis.reasoning[0]}
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* Matched Patterns */}
             <div className="mb-3">
                 <div className="text-xs text-gray-400 mb-1">Matched Patterns:</div>
@@ -541,6 +570,24 @@ const TopGainersModal = ({ isOpen, onClose }) => {
                                 <div className="mt-2 text-gray-400">
                                     Historical Accuracy: <span className="text-cyan-400">{predictions.predictions.methodology.historicalAccuracy}</span>
                                 </div>
+                                {/* ML Service Status */}
+                                {predictions.predictions.methodology.mlServiceStatus && (
+                                    <div className="mt-2 flex items-center gap-2">
+                                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${
+                                            predictions.predictions.methodology.mlServiceStatus.available
+                                                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                                                : 'bg-gray-600/20 text-gray-400 border border-gray-600/30'
+                                        }`}>
+                                            <span>🤖</span>
+                                            <span>ML Model: {predictions.predictions.methodology.mlServiceStatus.available ? 'Active' : 'Offline'}</span>
+                                        </span>
+                                        {predictions.predictions.methodology.mlServiceStatus.available && (
+                                            <span className="text-xs text-indigo-300/70">
+                                                {predictions.predictions.methodology.mlServiceStatus.info}
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </details>
                     </div>

@@ -1,11 +1,15 @@
 const express = require('express');
+const http = require('http');
 const cors = require('cors');
 const cron = require('node-cron');
 const stockRoutes = require('./routes/stock');
+const optionsRoutes = require('./routes/options');
+const { router: realtimeRoutes, initializeWebSocket } = require('./routes/realtime');
 const niftyService = require('./services/niftyTotalMarketService');
 const mlService = require('./services/mlIntegrationService');
 
 const app = express();
+const server = http.createServer(app);
 const port = process.env.PORT || 5000;
 
 // Middleware
@@ -23,6 +27,8 @@ app.use((req, res, next) => {
 
 // Routes
 app.use('/api/stock', stockRoutes);
+app.use('/api/options', optionsRoutes);
+app.use('/api/realtime', realtimeRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -107,10 +113,15 @@ console.log('⏰ Auto-refresh schedulers configured:');
 console.log('   - Stock list refresh: Daily at 5:30 AM IST');
 console.log('   - Pattern discovery: Daily at 6:00 AM IST');
 
-// Start server
-app.listen(port, async () => {
+// Start server with WebSocket support
+server.listen(port, async () => {
     console.log(`Stock Analysis Server listening at http://localhost:${port}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+
+    // Initialize WebSocket for real-time trading
+    console.log('🔌 Initializing WebSocket server...');
+    initializeWebSocket(server);
+    console.log('✅ WebSocket ready at ws://localhost:' + port + '/ws/trading');
 
     // Initialize ML Service connection
     console.log('🤖 Initializing ML Service connection...');

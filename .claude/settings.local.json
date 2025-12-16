@@ -19,7 +19,9 @@
       "Bash(curl:*)",
       "Bash(timeout:*)",
       "Bash(cat:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(netstat:*)",
+      "Bash(powershell -Command \"Invoke-RestMethod -Uri ''http://localhost:5000/api/health'' -Method Get\")"
     ]
   }
 }

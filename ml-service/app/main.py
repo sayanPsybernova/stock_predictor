@@ -4,6 +4,8 @@ import uvicorn
 
 from app.config import HOST, PORT, LOG_LEVEL
 from app.api.routes import health, predictions, training
+from app.api.routes import options as options_routes
+from app.api.routes import pro_prediction
 
 # Create FastAPI app
 app = FastAPI(
@@ -25,6 +27,8 @@ app.add_middleware(
 app.include_router(health.router, tags=["Health"])
 app.include_router(predictions.router, prefix="/api/v1", tags=["Predictions"])
 app.include_router(training.router, prefix="/api/v1", tags=["Training"])
+app.include_router(options_routes.router, prefix="/api/v1/options", tags=["Options"])
+app.include_router(pro_prediction.router, tags=["Pro Trader"])
 
 @app.on_event("startup")
 async def startup_event():
